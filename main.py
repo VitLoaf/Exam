@@ -216,20 +216,22 @@ def show_expense_details():
     # Перегляд повної інформації про конкретну витрату за ID
     exp_id = input("ID витрати: ")
     if not validate_id(exp_id):
-        print("Невірний ID.")
-        return None
+        return None 
 
     data = execute_query("""
-        SELECT e.id, e.title, e.date, c.name, e.amount 
+        SELECT e.id, e.title, e.date, c.name, e.amount, e.currency, e.description 
         FROM expenses e JOIN categories c ON e.category_id = c.id 
         WHERE e.id=%s AND e.is_deleted=FALSE
     """, (exp_id,), fetch_one=True)
 
     if not data:
         print("Не знайдено.")
+        return None
     else:
-        print("Деталі:", data)
-    return data
+        print(f"\n--- ДЕТАЛІ ВИТРАТИ ID:{data[0]} ---")
+        # ... твій код виводу ...
+        print(f"Опис: {data[6] if data[6] else '-'}")
+        return True
 
 def search_expenses():
     print("\n--- Розширений пошук (залиште порожнім, щоб ігнорувати параметр) ---")
@@ -339,11 +341,37 @@ def delete_expense():
 
 # Логіка експорту за звітів
 def report_total():
-    # Розрахунок загальної суми всіх витрат
-    data = execute_query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE is_deleted=FALSE", fetch_one=True)
-    print(f"\nЗагальна сума всіх витрат: {data[0]} UAH")
-    return data
+    print("\n--- ЗАГАЛЬНА СУМА ВИТРАТ ---")
+    # Групуємо за валютою, щоб не додавати долари до гривень
+    data = execute_query("""
+        SELECT currency, SUM(amount) FROM expenses 
+        WHERE is_deleted=FALSE GROUP BY currency
+    """, fetch=True)
+    if not data:
+        print("Витрат немає.")
+    else:
+        for row in data:
+            print(f"Всього у {row[0]}: {row[1]:.2f}")
 
+def report_totals_by_category():
+    print("\n--- ПІДСУМКИ ПО КАТЕГОРІЯХ (ЗА ВАЛЮТАМИ) ---")
+    query = """
+        SELECT c.name, e.currency, SUM(e.amount)
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.is_deleted = FALSE
+        GROUP BY c.name, e.currency
+        ORDER BY c.name
+    """
+    results = execute_query(query, fetch=True)
+    if not results:
+        print("Дані відсутні.")
+    else:
+        print(f"{'Категорія':<20} | {'Сума':<15} | {'Валюта'}")
+        print("-" * 45)
+        for r in results:
+            print(f"{r[0]:<20} | {r[2]:>10.2f} | {r[1]}")
+            
 def report_max_min_by_category():
     # Макс/Мін у кожній категорії
     print("\n--- Максимальні та мінімальні витрати по категоріях ---")
@@ -379,21 +407,13 @@ def report_extreme_in_period():
 
 
 def report_average_daily():
-    # Середні витрати на день за період
+    # Середні витрати на день за період з урахуванням різних валют
     start = input("З якої дати (YYYY-MM-DD): ")
     end = input("По яку дату (YYYY-MM-DD): ")
 
     if not (validate_date(start) and validate_date(end)):
         print("Невірний формат дат.")
-        return None  # ВИПРАВЛЕНО: рядок 379
-
-    # Отримуємо загальну суму за період
-    data = execute_query("""
-        SELECT COALESCE(SUM(amount), 0) FROM expenses 
-        WHERE is_deleted=FALSE AND date BETWEEN %s AND %s
-    """, (start, end), fetch_one=True)
-
-    total = float(data[0])
+        return None
 
     # Розраховуємо кількість днів у періоді
     d1 = datetime.datetime.strptime(start, "%Y-%m-%d")
@@ -402,27 +422,50 @@ def report_average_daily():
 
     if days_count <= 0:
         print("Помилка: Кінцева дата має бути більшою за початкову.")
-        return None  # ВИПРАВЛЕНО: рядок 396
+        return None
 
-    average = total / days_count
+    # Отримуємо суми, згруповані за валютою (GROUP BY)
+    results = execute_query("""
+        SELECT currency, COALESCE(SUM(amount), 0) 
+        FROM expenses 
+        WHERE is_deleted=FALSE AND date BETWEEN %s AND %s
+        GROUP BY currency
+    """, (start, end), fetch=True)
+
+    if not results:
+        print("\nВитрат за цей період не знайдено.")
+        return None
 
     print(f"\n--- Аналіз періоду ({days_count} днів) ---")
-    print(f"Загальна сума: {total:.2f} UAH")
-    print(f"Середні витрати на день: {average:.2f} UAH")
-    print(f"Примітка: Розрахунок проведено за кількістю календарних днів.")
-    return average
+    for row in results:
+        curr = row[0]
+        total_in_curr = float(row[1])
+        average = total_in_curr / days_count
+        print(f"Валюта: {curr}")
+        print(f"  Загальна сума: {total_in_curr:.2f} {curr}")
+        print(f"  Середні витрати на день: {average:.2f} {curr}")
+
+    print("\nПримітка: Розрахунок проведено окремо для кожної валюти.")
+    return True
 
 def report_top_category():
-    # Бонус: Топ категорія
-    print("\n--- ТОП-категорія (де ви витрачаєте найбільше) ---")
+    print("\n--- ТОП-КАТЕГОРІЇ ЗА ВАЛЮТАМИ ---")
     query = """
-        SELECT c.name, SUM(e.amount) as total
+        SELECT c.name, SUM(e.amount) as total, e.currency
         FROM expenses e JOIN categories c ON e.category_id = c.id
-        WHERE e.is_deleted = FALSE GROUP BY c.name
-        ORDER BY total DESC LIMIT 1
+        WHERE e.is_deleted = FALSE 
+        GROUP BY c.name, e.currency
+        ORDER BY total DESC
     """
-    result = execute_query(query, fetch_one=True)
-    if result: print(f"Ваша топ-категорія: '{result[0]}' з сумою {result[1]} UAH")
+    results = execute_query(query, fetch=True)
+    if results:
+        # Показуємо лідера для кожної валюти
+        seen_currencies = set()
+        for r in results:
+            if r[2] not in seen_currencies:
+                print(f"Топ у {r[2]}: '{r[0]}' ({r[1]:.2f})")
+                seen_currencies.add(r[2])
+
 
 def export_csv():
     # Експорт усіх активних витрат у файл CSV у папку export
@@ -430,9 +473,8 @@ def export_csv():
         SELECT e.date, e.title, e.amount, c.name FROM expenses e 
         JOIN categories c ON e.category_id = c.id WHERE e.is_deleted=FALSE
     """, fetch=True)
-    if not data:
-        print("Немає даних.")
-        return None
+    if not data: return None
+
     os.makedirs("export", exist_ok=True)
     with open("export/report.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
