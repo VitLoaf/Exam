@@ -213,14 +213,15 @@ def list_expenses():
     return data
 
 def show_expense_details():
-    # Перегляд повної інформації про конкретну витрату за ID
     exp_id = input("ID витрати: ")
     if not validate_id(exp_id):
-        return None 
+        return None
 
+    # Додаємо e.currency та e.description у SQL-запит
     data = execute_query("""
         SELECT e.id, e.title, e.date, c.name, e.amount, e.currency, e.description 
-        FROM expenses e JOIN categories c ON e.category_id = c.id 
+        FROM expenses e 
+        JOIN categories c ON e.category_id = c.id 
         WHERE e.id=%s AND e.is_deleted=FALSE
     """, (exp_id,), fetch_one=True)
 
@@ -229,8 +230,11 @@ def show_expense_details():
         return None
     else:
         print(f"\n--- ДЕТАЛІ ВИТРАТИ ID:{data[0]} ---")
-        # ... твій код виводу ...
-        print(f"Опис: {data[6] if data[6] else '-'}")
+        print(f"Назва: {data[1]}")
+        print(f"Дата: {data[2]}")
+        print(f"Категорія: {data[3]}")
+        print(f"Сума: {data[4]} {data[5]}")  # Вивід суми разом з валютою
+        print(f"Опис: {data[6] if data[6] else '—'}")  # Повний опис або прочерк
         return True
 
 def search_expenses():
@@ -371,7 +375,7 @@ def report_totals_by_category():
         print("-" * 45)
         for r in results:
             print(f"{r[0]:<20} | {r[2]:>10.2f} | {r[1]}")
-            
+
 def report_max_min_by_category():
     # Макс/Мін у кожній категорії
     print("\n--- Максимальні та мінімальні витрати по категоріях ---")
@@ -468,19 +472,22 @@ def report_top_category():
 
 
 def export_csv():
-    # Експорт усіх активних витрат у файл CSV у папку export
     data = execute_query("""
-        SELECT e.date, e.title, e.amount, c.name FROM expenses e 
-        JOIN categories c ON e.category_id = c.id WHERE e.is_deleted=FALSE
+        SELECT e.date, e.title, e.amount, e.currency, c.name, e.description 
+        FROM expenses e JOIN categories c ON e.category_id = c.id 
+        WHERE e.is_deleted=FALSE
     """, fetch=True)
-    if not data: return None
+
+    if not data:
+        return None  # Тут все ок
 
     os.makedirs("export", exist_ok=True)
     with open("export/report.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Дата", "Назва", "Сума", "Категорія"])
+        writer.writerow(["Дата", "Назва", "Сума", "Валюта", "Категорія", "Опис"])
         writer.writerows(data)
-    print("Збережено в export/report.csv")
+
+    print("Збережено в export/report.csv.")
     return True
 
 # Системні функції (SEED DATA)
